@@ -1,0 +1,262 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model MetroCluster {
+  id       String @id @default(uuid())
+  name     String @unique
+  timezone String @default("America/Detroit")
+
+  config  ClusterConfig?
+  stores  Store[]
+  workers Worker[]
+  cards   ActionCard[]
+
+  @@map("metro_clusters")
+}
+
+model ClusterConfig {
+  id         String   @id @default(uuid())
+  clusterId  String   @unique
+  thresholds Json     // ThresholdConfig shape
+  updatedAt  DateTime @updatedAt
+
+  cluster MetroCluster @relation(fields: [clusterId], references: [id])
+
+  @@map("cluster_configs")
+}
+
+model Store {
+  id           String @id @default(uuid())
+  name         String
+  clusterId    String
+  address      String @default("")
+  driverTarget Int    @default(1)
+
+  cluster MetroCluster    @relation(fields: [clusterId], references: [id])
+  windows DeliveryWindow[]
+  shifts  Shift[]
+
+  approvedWorkers Worker[] @relation("WorkerApprovedStores")
+  homeWorkers     Worker[] @relation("WorkerHomeStore")
+
+  @@map("stores")
+}
+
+model DeliveryWindow {
+  id            String       @id @default(uuid())
+  storeId       String
+  date          DateTime     @db.Date
+  startTime     DateTime     @db.Time()
+  endTime       DateTime     @db.Time()
+  shopStartTime DateTime     @db.Time()
+  shopEndTime   DateTime     @db.Time()
+  status        WindowStatus @default(OPEN)
+
+  store    Store            @relation(fields: [storeId], references: [id])
+  snapshot WindowSnapshot?
+  cards    ActionCard[]
+
+  @@index([storeId, date])
+  @@map("delivery_windows")
+}
+
+enum WindowStatus {
+  OPEN
+  AT_RISK
+  CLOSED
+}
+
+model WindowSnapshot {
+  id              String         @id @default(uuid())
+  windowId        String         @unique
+  orderVolume     Int            @default(0)
+  shopperSupply   Int            @default(0)
+  shopperDemand   Int            @default(0)
+  shopperGap      Int            @default(0)
+  shopperUtilPct  Float          @default(0)
+  driverSupply    Int            @default(0)
+  driverTarget    Int            @default(1)
+  driverGap       Int            @default(0)
+  thresholdState  ThresholdState @default(OK)
+  lastEvaluatedAt DateTime       @default(now())
+  lastTriggeredBy TriggerSource  @default(SCHEDULED_SCAN)
+
+  window DeliveryWindow @relation(fields: [windowId], references: [id])
+
+  @@map("window_snapshots")
+}
+
+enum ThresholdState {
+  OK
+  WARNING
+  CRITICAL
+  GAP
+}
+
+enum TriggerSource {
+  ORDER_EVENT
+  SHIFT_EVENT
+  SCHEDULED_SCAN
+}
+
+model Worker {
+  id          String     @id @default(uuid())
+  wiwId       String     @unique
+  name        String
+  role        WorkerRole
+  type        WorkerType
+  homeStoreId String
+  clusterId   String
+  uphAvg      Float      @default(0)
+
+  homeStore       Store            @relation("WorkerHomeStore", fields: [homeStoreId], references: [id])
+  cluster         MetroCluster     @relation(fields: [clusterId], references: [id])
+  approvedStores  Store[]          @relation("WorkerApprovedStores")
+  shifts          Shift[]
+  recommendations Recommendation[]
+
+  @@index([clusterId, role, type])
+  @@map("workers")
+}
+
+enum WorkerRole {
+  SHOPPER
+  DRIVER
+  BOTH
+}
+
+enum WorkerType {
+  FIXED
+  FLOATER
+  FLEX
+  SHIFT_LEAD
+}
+
+model Shift {
+  id         String      @id @default(uuid())
+  wiwShiftId String      @unique
+  workerId   String
+  storeId    String
+  date       DateTime    @db.Date
+  startTime  DateTime    @db.Time()
+  endTime    DateTime    @db.Time()
+  netHours   Float
+  status     ShiftStatus @default(SCHEDULED)
+
+  worker Worker @relation(fields: [workerId], references: [id])
+  store  Store  @relation(fields: [storeId], references: [id])
+
+  @@index([storeId, date, status])
+  @@index([workerId, date])
+  @@map("shifts")
+}
+
+enum ShiftStatus {
+  SCHEDULED
+  CALLED_OUT
+  REMOVED
+  NO_SHOW
+}
+
+model ActionCard {
+  id         String   @id @default(uuid())
+  clusterId  String
+  windowId   String
+  type       GapType
+  lane       CardLane @default(NEEDS_ACTION)
+  urgency    Urgency  @default(LOW)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  resolvedAt DateTime?
+
+  cluster         MetroCluster     @relation(fields: [clusterId], references: [id])
+  window          DeliveryWindow   @relation(fields: [windowId], references: [id])
+  recommendations Recommendation[]
+  auditLogs       AuditLog[]
+
+  @@index([clusterId, lane, urgency])
+  @@map("action_cards")
+}
+
+enum GapType {
+  SHOPPER_GAP
+  DRIVER_GAP
+  BOTH_GAP
+  CONSOLIDATION
+}
+
+enum CardLane {
+  NEEDS_ACTION
+  IN_PROGRESS
+  RESOLVED
+  UNRESOLVED
+}
+
+enum Urgency {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Recommendation {
+  id        String               @id @default(uuid())
+  cardId    String
+  windowId  String
+  workerId  String
+  role      WorkerRole
+  priority  Int
+  reason    String
+  status    RecommendationStatus @default(PENDING)
+  urgency   Urgency              @default(LOW)
+  createdAt DateTime             @default(now())
+
+  card   ActionCard @relation(fields: [cardId], references: [id])
+  worker Worker     @relation(fields: [workerId], references: [id])
+
+  auditLogs AuditLog[]
+
+  @@map("recommendations")
+}
+
+enum RecommendationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+model AuditLog {
+  id               String      @id @default(uuid())
+  timestamp        DateTime    @default(now())
+  actorId          String      @default("SYSTEM")
+  action           AuditAction
+  cardId           String
+  recommendationId String?
+  declineReason    String?
+  previousState    Json?
+  metadata         Json?
+
+  card           ActionCard      @relation(fields: [cardId], references: [id])
+  recommendation Recommendation? @relation(fields: [recommendationId], references: [id])
+
+  @@index([cardId, timestamp])
+  @@map("audit_logs")
+}
+
+enum AuditAction {
+  THRESHOLD_CROSSED
+  RECOMMENDATION_GENERATED
+  ACCEPTED
+  DECLINED
+  CONSOLIDATED
+  ESCALATED
+  AUTO_FLAGGED
+  CARD_AUTO_RESOLVED
+}

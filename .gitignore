@@ -3,3 +3,11 @@ node_modules/
 out/
 .DS_Store
 *.tsbuildinfo
+.env
+.superset/
+
+/src/generated/prisma
+
+# Data files (WIW exports, order CSVs)
+*.xlsx
+*.csv
