@@ -425,6 +425,7 @@ The following features are referenced in the design but have not been implemente
 | **Hard cutoff logging** | 🚧 Needs build | Auto-move cards to Unresolved when shopping window starts |
 | **Consolidation logic** | 🚧 Needs build | Verify target window has capacity before suggesting |
 | **Recurring gap detection** | 🚧 Needs build | Flag same-store gaps appearing 3+ consecutive days |
+| **WIW shift automation** | 🚧 Needs build | Setup When I Work shift automation for accepted recommendations |
 
 ---
 
