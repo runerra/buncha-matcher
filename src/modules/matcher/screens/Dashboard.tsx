@@ -303,17 +303,20 @@ export function Dashboard() {
       return next
     })
     if (card?.windowId) {
+      // Strip -shopper / -driver suffix so the base window ID matches health grid entries
+      const baseWindowId = card.windowId.replace(/-(shopper|driver)$/, '')
       setReopenedWindows((prev) => {
         const next = new Set(prev)
-        next.add(card.windowId!)
+        next.add(baseWindowId)
         localStorage.setItem('matcher-reopened', JSON.stringify([...next]))
         return next
       })
     }
     // Audit log with impact data
     if (card) {
-      // Get order data and debug info for impact calculation
-      const od = card.windowId ? uploadData?.parsed.windowOrderData.get(card.windowId) : undefined
+      // Get order data and debug info for impact calculation (use base window ID without -shopper/-driver suffix)
+      const baseWinId = card.windowId?.replace(/-(shopper|driver)$/, '')
+      const od = baseWinId ? uploadData?.parsed.windowOrderData.get(baseWinId) : undefined
       const d = card.debug
       const selectedCandidate = d?.allCandidates?.find((c) => workerName ? c.workerName === workerName : c.isTopPick)
       const capacityAdded = selectedCandidate?.capacityAdded ?? 0
