@@ -110,12 +110,19 @@ export function StoreHealthGrid({ stores }: { stores: StoreWindowHealth[] }) {
                   if (!win) return <Box key={time} sx={{ flex: 1, height: 32 }} />
 
                   const colors = healthColor(win.health)
+                  const tipLines: string[] = [`${displayStoreName(store.storeName)} ${time} — ${win.atOrderCap ? 'Full' : healthLabel(win.health)}`]
+                  tipLines.push(`${win.orders} orders · ${win.units}/${win.maxCapacity} units`)
+                  if (win.units > win.maxCapacity) tipLines.push(`${win.units - win.maxCapacity} units over capacity`)
+                  else tipLines.push(`Remaining capacity: ${win.maxCapacity - win.units} units`)
+                  if (!win.driverOk) tipLines.push('Driver missing')
+                  if (win.atOrderCap) tipLines.push('Order cap reached')
                   return (
                     <Tooltip
                       key={win.id}
-                      title={`${displayStoreName(store.storeName)} ${time} — ${healthLabel(win.health)}${win.atOrderCap ? ' · Order cap reached' : ''}`}
+                      title={tipLines.join('\n')}
                       arrow
                       placement="top"
+                      slotProps={{ tooltip: { sx: { whiteSpace: 'pre-line', fontSize: '0.6875rem', lineHeight: 1.5 } } }}
                     >
                       <Box
                         sx={{

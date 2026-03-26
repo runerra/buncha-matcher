@@ -59,6 +59,7 @@ export interface UploadResult {
   parsed: ParsedSchedule
   byDate: Record<string, DayResult>  // "2026-03-24" → results for that day
   dates: string[]                     // sorted list of available dates
+  allFilesProvided: boolean           // true when shifts, roster, and orders are all uploaded
 }
 
 interface ScheduleUploadProps {
@@ -103,14 +104,14 @@ export function ScheduleUpload({ onResult, hasRestoredData }: ScheduleUploadProp
         applyOrderData(parsed, orderRows)
       }
 
-      processResult(parsed)
+      processResult(parsed, Boolean(schedule && roster && orders))
     } catch (err: any) {
       setStatus('error')
       setErrors([`${err?.message || err}`, err?.stack || ''])
     }
   }, []) // eslint-disable-line -- onResult is stable
 
-  function processResult(parsed: ParsedSchedule) {
+  function processResult(parsed: ParsedSchedule, allFilesProvided: boolean) {
     if (parsed.stores.length === 0 && parsed.shifts.length === 0) {
       setStatus('error')
       setErrors(['No data found. Check file format.'])
@@ -382,11 +383,17 @@ export function ScheduleUpload({ onResult, hasRestoredData }: ScheduleUploadProp
       byDate[date] = { windowHealth, gaps: clusterResult.windowResults.filter((r) => r.thresholdState !== 'OK'), recommendations }
     }
 
-    onResult({ parsed, byDate, dates })
+    onResult({ parsed, byDate, dates, allFilesProvided })
+
+    let totalOrders = 0
+    for (const od of parsed.windowOrderData.values()) {
+      totalOrders += od.orders ?? 0
+    }
+    const orderSummary = totalOrders > 0 ? ` · ${totalOrders} orders` : ''
 
     setStatus('loaded')
     setSummary(
-      `${parsed.stores.length} stores · ${parsed.workers.length} workers · ${parsed.shifts.length} shifts · ${dates.length} days · ${totalGaps} gaps`,
+      `${parsed.stores.length} stores · ${parsed.workers.length} workers · ${parsed.shifts.length} shifts · ${dates.length} days${orderSummary}`,
     )
     setErrors(parsed.errors)
   }

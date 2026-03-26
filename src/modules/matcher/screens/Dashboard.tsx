@@ -54,17 +54,7 @@ export function Dashboard() {
   const { tokens: t } = useAppTheme()
   const [selectedDate, setSelectedDate] = useState(() => new Date())
   const [selectedRegion, setSelectedRegion] = useState('detroit')
-  const [uploadData, setUploadData] = useState<UploadResult | null>(() => {
-    if (typeof window === 'undefined') return null
-    try {
-      const saved = localStorage.getItem('matcher-upload')
-      if (!saved) return null
-      const data = JSON.parse(saved)
-      data.parsed.orderVolumes = new Map(data.parsed._orderVolumes || [])
-      data.parsed.windowOrderData = new Map(data.parsed._windowOrderData || [])
-      return data as UploadResult
-    } catch { return null }
-  })
+  const [uploadData, setUploadData] = useState<UploadResult | null>(null)
 
   // Track accepted assignments: workerName → list of window times they're now assigned to
   interface AcceptedAssignment { workerName: string; storeName: string; windowTime: string; windowId: string }
@@ -127,21 +117,31 @@ export function Dashboard() {
   const dayResult = uploadData?.byDate?.[selectedISO] ?? null
 
   // Window health: filtered by region, with reopened windows marked as covered
+  // Gaps only shown when all 3 input files are provided
+  const allFiles = uploadData?.allFilesProvided ?? false
   const activeHealth: StoreWindowHealth[] = useMemo(() => {
     const raw = dayResult?.windowHealth ?? []
     const regionFiltered = filterStoresByRegion(raw, selectedRegion)
-    // Apply reopened windows — mark them as covered
     return regionFiltered.map((store) => ({
       ...store,
-      windows: store.windows.map((w) =>
-        reopenedWindows.has(w.id) ? { ...w, health: 'covered' as const, isOpen: true } : w,
-      ),
+      windows: store.windows.map((w) => {
+        // Downgrade gaps to covered when not all files are uploaded
+        if (!allFiles && w.health === 'gap') return { ...w, health: 'covered' as const }
+        if (w.health !== 'gap') return w
+        // A gap window is only fully covered when ALL its gap types are resolved
+        const hasShopperGap = w.units > w.maxCapacity || w.maxCapacity < 22
+        const hasDriverGap = !w.driverOk
+        const shopperResolved = !hasShopperGap || reopenedWindows.has(`${w.id}-shopper`)
+        const driverResolved = !hasDriverGap || reopenedWindows.has(`${w.id}-driver`)
+        if (shopperResolved && driverResolved) return { ...w, health: 'covered' as const, isOpen: true }
+        return w
+      }),
     }))
-  }, [dayResult, selectedRegion, reopenedWindows])
+  }, [dayResult, selectedRegion, reopenedWindows, allFiles])
 
   // Action cards: filter by region and remove dismissed
   const filteredQueue: ActionCardType[] = useMemo(() => {
-    if (!dayResult || !uploadData) return []
+    if (!dayResult || !uploadData || !allFiles) return []
     const regionStores = filterStoresByRegion(
       uploadData.parsed.stores.map((s) => ({ ...s, storeName: s.name })),
       selectedRegion,
@@ -160,7 +160,6 @@ export function Dashboard() {
     for (const store of activeHealth) {
       for (const win of store.windows) {
         if (win.health !== 'gap') continue
-        if (reopenedWindows.has(win.id)) continue
 
         const fullWin = uploadData.parsed.windows.find((w) => w.id === win.id)
         const od = uploadData.parsed.windowOrderData.get(win.id)
@@ -172,7 +171,7 @@ export function Dashboard() {
         const hasShopperGap = win.units > win.maxCapacity || win.maxCapacity < 22
         const shopperRecId = win.id + '-shopper'
         const shopperRec = recsByWindowId.get(shopperRecId)
-        if (hasShopperGap) {
+        if (hasShopperGap && !reopenedWindows.has(shopperRecId)) {
           if (shopperRec) {
             allRecs.push(shopperRec)
           } else {
@@ -189,8 +188,8 @@ export function Dashboard() {
         }
 
         // Check for driver need
-        if (!win.driverOk) {
-          const driverRecId = win.id + '-driver'
+        const driverRecId = win.id + '-driver'
+        if (!win.driverOk && !reopenedWindows.has(driverRecId)) {
           const driverRec = recsByWindowId.get(driverRecId)
           if (driverRec) {
             allRecs.push(driverRec)
@@ -207,11 +206,22 @@ export function Dashboard() {
           }
         }
 
-        // If neither specific gap but still flagged (e.g. by engine), use generic
+        // If neither specific gap condition matched but window is still flagged as gap by engine,
+        // generate a card so every gap window has a corresponding action
         if (!hasShopperGap && win.driverOk) {
           const genericRec = recsByWindowId.get(win.id + '-shopper') || recsByWindowId.get(win.id + '-driver')
           if (genericRec) {
             allRecs.push(genericRec)
+          } else {
+            allRecs.push({
+              windowId: win.id + '-shopper',
+              storeName: store.storeName,
+              windowTime,
+              issueType: 'Understaffed',
+              recommendation: 'ESCALATE',
+              description: od ? `${od.units}/${od.maxCapacity} units · flagged by gap engine` : 'Flagged by gap engine',
+              acceptLabel: 'Accept — escalate',
+            })
           }
         }
       }
@@ -219,7 +229,7 @@ export function Dashboard() {
 
     return allRecs
       .map((r, i) => ({
-        id: `${selectedISO}-${r.storeName}-${r.windowTime}-${i}`,
+        id: `${selectedISO}-${r.windowId ?? `${r.storeName}-${r.windowTime}-${i}`}`,
         issueType: r.issueType as ActionCardType['issueType'],
         recommendation: r.recommendation as ActionCardType['recommendation'],
         storeName: r.storeName,
@@ -234,7 +244,14 @@ export function Dashboard() {
         priorityLabel: ('priority' in r && r.priority ? (r as any).priority.label : 'High') as ActionCardType['priorityLabel'],
         debug: ('debug' in r ? r.debug : undefined) as ActionCardType['debug'],
       }))
-      .filter((c) => !dismissedCards.has(c.id))
+      .filter((c) => {
+        if (!dismissedCards.has(c.id)) return true
+        // Keep ESCALATE/CONSOLIDATE cards visible if gap is still unresolved
+        if (c.recommendation === 'ESCALATE' || c.recommendation === 'CONSOLIDATE') {
+          return c.windowId ? !reopenedWindows.has(c.windowId) : true
+        }
+        return false
+      })
       .map((card) => {
         // Post-process: remove workers who have been assigned to other windows
         if (!card.debug?.allCandidates || acceptedAssignments.length === 0) return card
@@ -278,18 +295,35 @@ export function Dashboard() {
         if (aScore !== bScore) return bScore - aScore
         return (b.units ?? 0) - (a.units ?? 0)
       })
-  }, [dayResult, selectedRegion, selectedISO, uploadData, dismissedCards, acceptedAssignments, activeHealth, reopenedWindows])
+  }, [dayResult, selectedRegion, selectedISO, uploadData, dismissedCards, acceptedAssignments, activeHealth, reopenedWindows, allFiles])
 
-  // Count orders saved (sum of units in reopened windows)
-  const ordersSaved = useMemo(() => {
-    if (!uploadData) return 0
-    let total = 0
-    for (const winId of reopenedWindows) {
-      const od = uploadData.parsed.windowOrderData.get(winId)
-      if (od) total += od.orders
+  // Count fully reopened windows (all gap types resolved) and orders saved
+  const { reopenedCount, ordersSaved } = useMemo(() => {
+    if (!uploadData || !dayResult) return { reopenedCount: 0, ordersSaved: 0 }
+    const raw = dayResult.windowHealth ?? []
+    const regionStores = filterStoresByRegion(raw, selectedRegion)
+    let count = 0
+    let orders = 0
+    for (const store of regionStores) {
+      for (const w of store.windows) {
+        if (w.health !== 'gap') continue
+        // Only count windows where at least one gap was actively resolved via accept
+        const shopperReopened = reopenedWindows.has(`${w.id}-shopper`)
+        const driverReopened = reopenedWindows.has(`${w.id}-driver`)
+        if (!shopperReopened && !driverReopened) continue
+        const hasShopperGap = w.units > w.maxCapacity || w.maxCapacity < 22
+        const hasDriverGap = !w.driverOk
+        const shopperResolved = !hasShopperGap || shopperReopened
+        const driverResolved = !hasDriverGap || driverReopened
+        if (shopperResolved && driverResolved) {
+          count++
+          const od = uploadData.parsed.windowOrderData.get(w.id)
+          if (od) orders += od.orders
+        }
+      }
     }
-    return total
-  }, [reopenedWindows, uploadData])
+    return { reopenedCount: count, ordersSaved: orders }
+  }, [reopenedWindows, uploadData, dayResult, selectedRegion])
 
   const handleAccept = useCallback((cardId: string, workerName?: string) => {
     const card = filteredQueue.find((c) => c.id === cardId)
@@ -309,12 +343,13 @@ export function Dashboard() {
       localStorage.setItem('matcher-dismissed', JSON.stringify([...next]))
       return next
     })
-    if (card?.windowId) {
-      // Strip -shopper / -driver suffix so the base window ID matches health grid entries
-      const baseWindowId = card.windowId.replace(/-(shopper|driver)$/, '')
+    if (card?.windowId && card.recommendation !== 'ESCALATE' && card.recommendation !== 'CONSOLIDATE') {
+      // Track the specific gap type resolved (e.g. "win-id-shopper" or "win-id-driver")
+      // Window only marked as fully covered when all its gap types are resolved
+      // ESCALATE/CONSOLIDATE don't actually fill the gap — they just acknowledge it
       setReopenedWindows((prev) => {
         const next = new Set(prev)
-        next.add(baseWindowId)
+        next.add(card.windowId!)
         localStorage.setItem('matcher-reopened', JSON.stringify([...next]))
         return next
       })
@@ -423,19 +458,6 @@ export function Dashboard() {
     localStorage.removeItem('matcher-audit')
     localStorage.removeItem('matcher-twilio')
     localStorage.removeItem('matcher-assignments')
-    try {
-      const toSave = {
-        ...result,
-        parsed: {
-          ...result.parsed,
-          orderVolumes: undefined,
-          _orderVolumes: Array.from(result.parsed.orderVolumes.entries()),
-          windowOrderData: undefined,
-          _windowOrderData: Array.from(result.parsed.windowOrderData.entries()),
-        },
-      }
-      localStorage.setItem('matcher-upload', JSON.stringify(toSave))
-    } catch { /* quota exceeded */ }
   }, [])
 
   return (
@@ -452,18 +474,22 @@ export function Dashboard() {
 
         <ScheduleUpload onResult={handleUpload} hasRestoredData={!!uploadData} />
 
-        <SummaryCounters
-          storeHealth={activeHealth}
-          needsAction={filteredQueue.length}
-          reopenedToday={reopenedWindows.size}
-          ordersSaved={ordersSaved}
-        />
+        {allFiles && (
+          <>
+            <SummaryCounters
+              storeHealth={activeHealth}
+              needsAction={filteredQueue.length}
+              reopenedToday={reopenedCount}
+              ordersSaved={ordersSaved}
+            />
 
-        {activeHealth.length > 0 && (
-          <Box>
-            <SectionLabel>Window Health</SectionLabel>
-            <StoreHealthGrid stores={activeHealth} />
-          </Box>
+            {activeHealth.length > 0 && (
+              <Box>
+                <SectionLabel>Window Health</SectionLabel>
+                <StoreHealthGrid stores={activeHealth} />
+              </Box>
+            )}
+          </>
         )}
 
         <Box>
@@ -504,7 +530,9 @@ export function Dashboard() {
             {filteredQueue.length === 0 && (
               <Typography variant="body2" sx={{ color: t.text.tertiary, py: 1 }}>
                 {!uploadData
-                  ? 'Upload shift schedule and orders to get started.'
+                  ? 'Upload shifts, roster, and orders to get started.'
+                  : !allFiles
+                    ? 'Upload all 3 files (shifts, roster, orders) to see gap recommendations.'
                   : dayResult && dayResult.gaps.length > 0 && dayResult.recommendations.length === 0
                     ? `${dayResult.gaps.length} gaps detected but no workers available — escalation needed.`
                     : dismissedCards.size > 0 && dayResult && dayResult.recommendations.length > 0
