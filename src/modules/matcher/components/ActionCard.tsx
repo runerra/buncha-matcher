@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Box, Typography, Button, Collapse } from '@mui/material'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import { useAppTheme } from '../theme/ThemeContext'
+import { DeclineForm } from './DeclineForm'
 import type { ActionCard as ActionCardData, IssueType } from '../data/mock'
 
 function accentColor(priorityLabel: string | undefined, tokens: ReturnType<typeof useAppTheme>['tokens']) {
@@ -16,13 +17,14 @@ function accentColor(priorityLabel: string | undefined, tokens: ReturnType<typeo
 interface ActionCardProps {
   card: ActionCardData
   onAccept: (cardId: string, workerName?: string) => void
-  onDecline: (cardId: string) => void
+  onDecline: (cardId: string, initials: string, reason: string, declinedWorker?: string) => void
 }
 
 export function ActionCard({ card, onAccept, onDecline }: ActionCardProps) {
   const { tokens: t } = useAppTheme()
   const [showDebug, setShowDebug] = useState(false)
   const [selectedWorker, setSelectedWorker] = useState<number>(0) // index into allCandidates
+  const [declineAnchor, setDeclineAnchor] = useState<HTMLElement | null>(null)
   const d = card.debug
 
   const activeCandidateName = d?.allCandidates?.[selectedWorker]?.workerName
@@ -73,7 +75,7 @@ export function ActionCard({ card, onAccept, onDecline }: ActionCardProps) {
             <Button
               variant="outlined"
               size="small"
-              onClick={() => onDecline(card.id)}
+              onClick={(e) => setDeclineAnchor(e.currentTarget)}
               sx={{
                 borderColor: t.accent.decline, color: t.accent.decline, fontWeight: 500,
                 '&:hover': { borderColor: t.accent.declineHover, bgcolor: `${t.accent.decline}08` },
@@ -81,6 +83,15 @@ export function ActionCard({ card, onAccept, onDecline }: ActionCardProps) {
             >
               Decline
             </Button>
+            <DeclineForm
+              anchorEl={declineAnchor}
+              workerName={activeCandidateName}
+              onCancel={() => setDeclineAnchor(null)}
+              onSubmit={(initials, reason) => {
+                setDeclineAnchor(null)
+                onDecline(card.id, initials, reason, activeCandidateName)
+              }}
+            />
           </Box>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>

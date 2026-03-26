@@ -415,7 +415,7 @@ The following features are referenced in the design but have not been implemente
 
 | Feature | Status | Notes |
 |---|---|---|
-| **Decline with reason flow** | 🚧 Needs build | UI form for initials + reason, decline log storage, re-evaluation trigger |
+| **Decline with reason flow** | ✅ Built | Popover form with initials + reason (4 predefined options + free text). Decline logged to Activity Log with issue type, action type, worker, reason, and actor. Log filtered by date and region. Re-evaluation on decline deferred — card is dismissed on decline. |
 | **Supply position view** | 🚧 Needs build | Shopper/driver supply vs demand, flex pool exhaustion, recurring gap detection |
 | **Real-time DB connection** | 🚧 Needs dev team | Replace file uploads with live DB queries for orders and shifts |
 | **Twilio integration** | 🚧 Needs build | Two-call pattern, inbound reply handler, WIW write-back |

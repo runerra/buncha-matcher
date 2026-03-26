@@ -94,6 +94,8 @@ export function Dashboard() {
     timestamp: string
     action: 'ACCEPTED' | 'DECLINED'
     cardLabel: string
+    windowDate?: string
+    storeName?: string
     worker?: string
     impact?: {
       capacityAdded: number
@@ -104,6 +106,11 @@ export function Dashboard() {
       ordersSaved: number
       recommendation: string
     }
+    recommendation?: string
+    issueType?: string
+    declineReason?: string
+    declineInitials?: string
+    declinedWorker?: string
   }
   interface TwilioMsg { id: string; to: string; context: string; body: string; status: 'pending' | 'sent' }
 
@@ -329,6 +336,8 @@ export function Dashboard() {
         timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
         action: 'ACCEPTED',
         cardLabel: `${card.storeName} · ${card.windowTime}`,
+        windowDate: selectedISO,
+        storeName: card.storeName,
         worker: workerName,
         impact: {
           capacityAdded,
@@ -364,7 +373,7 @@ export function Dashboard() {
     }
   }, [filteredQueue])
 
-  const handleDecline = useCallback((cardId: string) => {
+  const handleDecline = useCallback((cardId: string, initials: string, reason: string, declinedWorker?: string) => {
     const card = filteredQueue.find((c) => c.id === cardId)
     setDismissedCards((prev) => {
       const next = new Set(prev)
@@ -377,6 +386,13 @@ export function Dashboard() {
         timestamp: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
         action: 'DECLINED',
         cardLabel: `${card.storeName} · ${card.windowTime}`,
+        windowDate: selectedISO,
+        storeName: card.storeName,
+        recommendation: card.recommendation,
+        issueType: card.issueType,
+        declineInitials: initials,
+        declineReason: reason,
+        declinedWorker: declinedWorker,
       }
       setAuditLog((prev) => {
         const next = [entry, ...prev]
@@ -570,35 +586,122 @@ export function Dashboard() {
           </>
         )}
 
-        {/* Audit Log */}
-        {auditLog.length > 0 && (
+        {/* Audit Log — filtered by selected date + region */}
+        {(() => {
+          const filtered = auditLog.filter((e) => {
+            if (e.windowDate && e.windowDate !== selectedISO) return false
+            if (e.storeName) {
+              const regionStores = filterStoresByRegion([{ storeName: e.storeName }], selectedRegion)
+              if (regionStores.length === 0) return false
+            }
+            return true
+          })
+          return filtered.length > 0 && (
           <>
             <Divider sx={{ borderColor: t.border.default }} />
             <Box>
               <SectionLabel>Activity Log</SectionLabel>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                {auditLog.map((e, i) => (
-                  <Box key={i} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 0.5 }}>
-                    <Typography sx={{ fontSize: '0.75rem', color: t.text.secondary }}>
-                      {e.cardLabel}{e.worker ? ` · ${e.worker}` : ''}
-                      {e.impact?.capacityAdded ? ` · +${e.impact.capacityAdded} units` : ''}
-                    </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexShrink: 0, ml: 2 }}>
-                      {e.impact?.windowReopened && (
-                        <Typography sx={{ fontSize: '0.6875rem', color: '#2D7A4F', fontWeight: 600 }}>
-                          Window reopened
-                        </Typography>
-                      )}
-                      <Typography sx={{ fontSize: '0.6875rem', color: t.text.tertiary }}>
-                        {e.action === 'ACCEPTED' ? 'Accepted' : 'Declined'} {e.timestamp}
-                      </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {filtered.map((e, i) => {
+                  const isAccept = e.action === 'ACCEPTED'
+                  const accentColor = isAccept ? t.accent.primary : t.accent.decline
+                  const labelStyle = { fontSize: '0.625rem', color: t.text.tertiary, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 500, minWidth: 52 } as const
+                  const valueStyle = { fontSize: '0.75rem', color: t.text.primary } as const
+                  return (
+                    <Box key={i} sx={{
+                      display: 'flex', borderRadius: 1.5, bgcolor: t.bg.card,
+                      border: `1px solid ${t.border.default}`, overflow: 'hidden',
+                    }}>
+                      <Box sx={{ width: 3, bgcolor: accentColor, flexShrink: 0 }} />
+                      <Box sx={{ flex: 1, px: 2, py: 1.5 }}>
+                        {/* Header: status badge + store/window + timestamp */}
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Typography sx={{
+                              fontSize: '0.625rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+                              color: accentColor, bgcolor: `${accentColor}12`, px: 0.75, py: 0.25, borderRadius: 0.75,
+                            }}>
+                              {isAccept ? 'Accepted' : 'Declined'}
+                            </Typography>
+                            {e.impact?.windowReopened && (
+                              <Typography sx={{
+                                fontSize: '0.625rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+                                color: '#2D7A4F', bgcolor: '#2D7A4F12', px: 0.75, py: 0.25, borderRadius: 0.75,
+                              }}>
+                                Window reopened
+                              </Typography>
+                            )}
+                          </Box>
+                          <Typography sx={{ fontSize: '0.6875rem', color: t.text.tertiary }}>{e.timestamp}</Typography>
+                        </Box>
+
+                        {/* Structured fields */}
+                        <Box sx={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 2, rowGap: 0.5 }}>
+                          <Typography sx={labelStyle}>Window</Typography>
+                          <Typography sx={valueStyle}>{e.cardLabel}</Typography>
+
+                          {isAccept && e.impact?.recommendation && (
+                            <>
+                              <Typography sx={labelStyle}>Action</Typography>
+                              <Typography sx={valueStyle}>{e.impact.recommendation}</Typography>
+                            </>
+                          )}
+                          {isAccept && e.worker && (
+                            <>
+                              <Typography sx={labelStyle}>Worker</Typography>
+                              <Typography sx={valueStyle}>{e.worker}</Typography>
+                            </>
+                          )}
+                          {isAccept && e.impact && (
+                            <>
+                              <Typography sx={labelStyle}>Impact</Typography>
+                              <Typography sx={valueStyle}>
+                                +{e.impact.capacityAdded} units · supply {e.impact.supplyBefore} → {e.impact.supplyAfter}
+                                {e.impact.ordersSaved ? ` · ${e.impact.ordersSaved} orders saved` : ''}
+                              </Typography>
+                            </>
+                          )}
+
+                          {!isAccept && e.issueType && (
+                            <>
+                              <Typography sx={labelStyle}>Issue</Typography>
+                              <Typography sx={valueStyle}>{e.issueType}</Typography>
+                            </>
+                          )}
+                          {!isAccept && e.recommendation && (
+                            <>
+                              <Typography sx={labelStyle}>Action</Typography>
+                              <Typography sx={valueStyle}>{e.recommendation}</Typography>
+                            </>
+                          )}
+                          {!isAccept && e.declinedWorker && (
+                            <>
+                              <Typography sx={labelStyle}>Worker</Typography>
+                              <Typography sx={valueStyle}>{e.declinedWorker}</Typography>
+                            </>
+                          )}
+                          {!isAccept && e.declineReason && (
+                            <>
+                              <Typography sx={labelStyle}>Reason</Typography>
+                              <Typography sx={valueStyle}>{e.declineReason}</Typography>
+                            </>
+                          )}
+                          {!isAccept && e.declineInitials && (
+                            <>
+                              <Typography sx={labelStyle}>By</Typography>
+                              <Typography sx={valueStyle}>{e.declineInitials}</Typography>
+                            </>
+                          )}
+                        </Box>
+                      </Box>
                     </Box>
-                  </Box>
-                ))}
+                  )
+                })}
               </Box>
             </Box>
           </>
-        )}
+        )
+        })()}
       </Box>
     </AppShell>
   )
